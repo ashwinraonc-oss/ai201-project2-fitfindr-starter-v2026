@@ -59,24 +59,26 @@
 
 ### `search_listings`
 
-- **What it does:**
-- **Inputs:** <!-- name and type each: `max_price` (float), not "a price" -->
-- **Returns:**
-- **When it has nothing:**
+- **What it does:** Searches the local listings data for items matching free-text keywords, optionally filtered down by size and a maximum price.
+- **Inputs:** `description` (str) — keywords describing what the user wants, e.g. `"vintage graphic tee"`. `size` (str or None) — a size to filter by, or `None` to skip size filtering (see the size-match rule below). `max_price` (float or None) — an inclusive price ceiling, or `None` to skip price filtering.
+- **Returns:** A list of listing dicts, best keyword match first, at most `config.SEARCH_RESULT_LIMIT` (10) of them. Each dict has `id`, `title`, `description`, `category`, `style_tags` (list[str]), `size`, `condition`, `price` (float), `colors` (list[str]), `brand` (str or None), `platform`.
+- **When it has nothing:** Returns `[]` — an empty list, never `None`, never an exception.
+
+**Size-match rule** (decided now, not left to the implementation): normalize both the listing's `size` and the query's `size` by lowercasing and dropping any parenthetical note (`"XL (oversized)"` → `"xl"`). Split the normalized listing size on `"/"` into candidate tokens (`"S/M"` → `["s", "m"]`), and additionally extract the bare number from a unit-prefixed size as a second candidate (`"US 8"` → `["us 8", "8"]`, `"W30"` → `["w30", "30"]`). A match requires the normalized query to be **exactly equal** to one of those candidates — never a substring check, because `"s" in "us 9"` and `"l" in "xl"` are both true and both wrong. `"One Size"` variants only match a query that itself normalizes to some form of "one size."
 
 ### `suggest_outfit`
 
-- **What it does:**
-- **Inputs:**
-- **Returns:**
-- **When it has nothing:**
+- **What it does:** Given one thrifted listing and the user's wardrobe, asks the model for one or two outfit combinations that use that item.
+- **Inputs:** `new_item` (dict) — a listing dict, the item under consideration. `wardrobe` (dict) — `{"items": [...]}`; the items list may be empty.
+- **Returns:** A non-empty string with the model's outfit suggestion(s). When the wardrobe is non-empty, the string names specific wardrobe items by their `name` field rather than describing them generically.
+- **When it has nothing:** When `wardrobe["items"]` is empty, returns general styling advice for the item on its own — still a non-empty string, never `""` and never an exception.
 
 ### `create_fit_card`
 
-- **What it does:**
-- **Inputs:**
-- **Returns:**
-- **When it has nothing:**
+- **What it does:** Writes a short caption, in the voice of someone posting the find, combining the listing's details with the suggested outfit.
+- **Inputs:** `outfit` (str) — the string returned by `suggest_outfit()`. `new_item` (dict) — the listing dict for the item.
+- **Returns:** A two-to-four sentence caption string that mentions the item, its price, and its platform exactly once each.
+- **When it has nothing:** If `outfit` is empty or whitespace-only, returns the literal string `"Can't write a caption without an outfit to describe — suggest_outfit needs to run first."` rather than raising or returning `""`.
 
 ---
 
@@ -93,7 +95,7 @@
      The grader checks your code against what you claim here, so the file and
      function have to be real. -->
 
-**Branch rule:**
+**Branch rule:** If `search_listings` returns an empty list, put a message in `session["error"]` that names what the user could change (e.g. "No listings matched — try a higher max price or a different size"), and stop — return the session without calling `suggest_outfit` or `create_fit_card`. Otherwise, take `search_results[0]` as `selected_item` and continue on to `suggest_outfit`, then `create_fit_card`.
 
 **Where it lives:** `agent.py::run_agent`
 
