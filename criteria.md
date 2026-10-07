@@ -25,10 +25,9 @@ Given a query that matches at least one listing, the agent completes all three
 tool calls and returns a fit card — in at least 4 of 5 tries.
 
 **Why this target:** My search is a plain keyword-overlap scorer against
-`title`, `description`, and `style_tags` — it's not semantic search. A real
+title, description, and style_tags. A real
 phrasing can describe a listing that genuinely exists in the data without
-sharing enough literal words with it to score above zero (e.g. calling
-something a "band tee" when the listing only says "graphic tee"). One miss in
+sharing enough literal words with it to score above zero. One miss in
 five realistic phrasings is a limitation of keyword matching, not a loop bug,
 so 4 of 5 is the honest target rather than 5 of 5.
 
@@ -37,33 +36,29 @@ so 4 of 5 is the honest target rather than 5 of 5.
 ## 2. An impossible query stops before the second tool
 
 Given a query that matches no listings, the agent stops before calling
-`suggest_outfit` and returns a message naming what to change — 5 of 5 tries.
+suggest_outfit and returns a message naming what to change — 5 of 5 tries.
 
 **Why this target:** This path has no fuzzy matching to forgive. The branch
 is: score every listing against the query, and if every score is zero, stop
-and return the canned message — there's no model call and no ambiguous
-judgment involved, just a plain `if not search_results`. If this branch ever
-fails even once, that's a real defect in the loop (e.g. calling
-`suggest_outfit` anyway, or crashing on an empty list), not natural variance
-to tolerate, so the target is 5 of 5.
+and return the canned message — there's no model call involved, just an if not search_results. Target is 5 of 5.
 
 ---
 
 ## 3. The same item moves through every tool
 
-Across 5 full runs on a matching query, the `id` of `session["selected_item"]`
-immediately after `search_listings` is identical to the `id` field of the
-`new_item` dict actually received by `suggest_outfit`, and identical again to
-the `id` field of the `new_item` dict actually received by `create_fit_card`
-— 5 of 5 tries. This is checked from the trace: `trace.step()` logs each
-tool's inputs, so the three `id`s can be read back and compared directly
+Across 5 full runs on a matching query, the id of session["selected_item"]
+immediately after search_listings is identical to the id field of the
+new_item dict actually received by suggest_outfit, and identical again to
+the id field of the new_item dict actually received by create_fit_card
+— 5 of 5 tries. This is checked from the trace: trace.step() logs each
+tool's inputs, so the three id's can be read back and compared directly
 instead of trusted from memory.
 
-**Why this target:** Carrying a dict (or its `id`) from one variable into the
-next function call is plain code, not a model call — there is nothing
-probabilistic about it. If the `id` ever changed between steps, that would
+**Why this target:** Carrying a dict from one variable into the
+next function call is plain code — there is nothing
+probabilistic about it. If the id ever changed between steps, that would
 mean something re-selected an item, indexed the wrong element, or mutated the
-session — a real bug every time it happens, not an acceptable rate of drift.
+session.
 So the target is 5 of 5, not 4.
 
 ---

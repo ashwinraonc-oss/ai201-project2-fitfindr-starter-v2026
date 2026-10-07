@@ -99,9 +99,9 @@
 
 **Where it lives:** `agent.py::run_agent`
 
-**How the query is parsed:** <!-- regex, string splitting, or asking the model — say which -->
+**How the query is parsed:** Regex (`agent.py::_parse_query`). A price like `under $30` / `$30` / `under 30` becomes `max_price`; `size <token>` becomes `size`; whatever is left is the `description`. No model call.
 
-**What moves through the session:** <!-- which fields, in what order -->
+**What moves through the session:** `parsed` → `search_results` → `selected_item` (first result) → `outfit_suggestion` → `fit_card`. Each stage reads its inputs back out of the session; `error` is set (and the loop returns) if the search is empty.
 
 ---
 
@@ -114,26 +114,69 @@
 
 **One full query**
 
-```
-$ python app.py ask '...'
-
-```
+<!-- Added once the planning loop is built (Milestone 3's loop step) — the
+     three tools below are tested standalone first, per the brief. -->
 
 **The three tools, tested one at a time**
 
 ```
 $ python -c "from tools import search_listings; print(search_listings('graphic tee', max_price=30))"
 
+[{'id': 'lst_002', 'title': 'Y2K Baby Tee — Butterfly Print', ...}, {'id': 'lst_006', 'title': 'Graphic Tee — 2003 Tour Bootleg Style', ...}, {'id': 'lst_017', 'title': 'Mesh Long-Sleeve Top — Black', ...}, {'id': 'lst_033', 'title': 'Vintage Band Tee — Faded Grey', ...}, {'id': 'lst_011', 'title': 'Low-Rise Cargo Pants — Khaki', ...}, {'id': 'lst_015', 'title': 'Vintage Graphic Hoodie — Faded Black', ...}]
 ```
 
-```
-$ python -c "from tools import suggest_outfit; ..."
+6 results, all under $30, highest keyword-overlap score first. `lst_011` (cargo pants) is the weakest match — it only shares the token "tee" with the query, from "...layering with a long tee" in its description — which is the plain-keyword-overlap limitation criterion 1 in `criteria.md` names.
 
 ```
+$ python -c "from tools import suggest_outfit; from utils.data_loader import get_example_wardrobe, load_listings; print(suggest_outfit(load_listings()[0], get_example_wardrobe()))"
+
+Here are two specific outfit ideas using the vintage Levi's 501 jeans and pieces from your existing wardrobe:
+
+Outfit 1: Effortless Streetwear Minimal
+- Bottoms: Vintage Levi's 501 Jeans ($38.00)
+- Top: White ribbed tank top
+- Outerwear: Oversized grey crewneck sweatshirt
+- Shoes: Chunky white sneakers
+- Accessories: Black crossbody bag
+
+Outfit 2: Vintage Grunge Edge
+- Bottoms: Vintage Levi's 501 Jeans ($38.00)
+- Top: Black cropped zip hoodie
+- Outerwear: Vintage black denim jacket
+- Shoes: Black combat boots
+- Accessories: Brown leather belt
+```
+
+Also tested with `get_empty_wardrobe()` in place of `get_example_wardrobe()` to hit the empty-case branch:
 
 ```
-$ python -c "from tools import create_fit_card; ..."
+Pair these vintage Levi's 501s with a tucked-in graphic tee and a leather jacket for an effortless, classic streetwear look. Alternatively, dress them up with an oversized button-down shirt and loafers or retro sneakers to balance the relaxed medium-wash denim.
+```
 
+Non-empty general advice, no wardrobe pieces named — no crash, no empty string.
+
+```
+$ python -c "from tools import create_fit_card; from utils.data_loader import load_listings; print(create_fit_card('jeans and white sneakers', load_listings()[0]))"
+
+Still screaming that I actually scored these vintage Levi's 501 jeans on Depop for only $38.00! The medium wash has that perfectly broken-in, 90s indie sleaze fade that you just can't fake. Throwing them on with some fresh white sneakers and calling it my entire personality for the foreseeable future.
+```
+
+Ran it three times on the same item to check for the identical-output trap the brief warns about. With the cache left on (the default), runs 2 and 3 came back **word-for-word identical** to run 1 — expected, since `TEMPERATURE` is 0.9 (not the other suspect) and an identical prompt reused the cached answer. Calling `generate.clear_cache()` between each of the three calls instead gave three genuinely different captions, each still naming the item, `$38.00`, and Depop exactly once:
+
+```
+Still screaming that I actually scored these vintage Levi's 501 jeans on Depop for only $38.00! The wash is that *exact* lazy-Sunday-morning blue that literally goes with everything. Honestly can't wait to throw them on with my beat-up white sneakers for the ultimate effortless 90s off-duty look.
+
+Still not over scoring these vintage Levi's 501 jeans for just $38 on Depop! The medium wash has that *exact* broken-in 90s slouch I've been hunting for forever. Honestly about to live in these with my beat-up white sneakers all season.
+
+Found the holy grail of denim today on depop and my life is officially complete. These vintage Levi's 501 jeans in the absolute dreamiest medium wash were only $38.00, which feels like an absolute steal. I'm already planning to live in them with my go-to white sneakers all through autumn.
+```
+
+Also tested the empty-outfit guard:
+
+```
+$ python -c "from tools import create_fit_card; from utils.data_loader import load_listings; print(create_fit_card('   ', load_listings()[0]))"
+
+Can't write a caption without an outfit to describe — suggest_outfit needs to run first.
 ```
 
 ---
