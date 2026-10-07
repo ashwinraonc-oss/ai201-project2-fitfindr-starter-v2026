@@ -116,8 +116,35 @@ You tell FitFindr what you're looking for, like "vintage graphic tee under $30, 
 
 **One full query**
 
-<!-- Added once the planning loop is built (Milestone 3's loop step) — the
-     three tools below are tested standalone first, per the brief. -->
+```
+$ python app.py ask 'vintage graphic tee under $30'
+
+
+  Found:    Y2K Baby Tee — Butterfly Print — $18.0 on depop
+
+  Outfit:   Here are two outfit suggestions pairing the Y2K Butterfly Baby Tee with pieces already in your wardrobe:
+
+**Outfit 1: Casual Streetwear Contrast**
+* **Top:** Y2K Butterfly Baby Tee
+* **Bottoms:** Baggy straight-leg jeans (dark wash)
+* **Outerwear:** Black cropped zip hoodie (worn open or draped over the shoulders)
+* **Shoes:** Chunky white sneakers
+* **Accessories:** Black crossbody bag
+* *Why it works:* The fitted, ultra-feminine silhouette of the baby tee balances out the relaxed, low-slung vibe of the baggy dark wash jeans. Adding the cropped zip hoodie and chunky white sneakers leans hard into a balanced Y2K streetwear aesthetic.
+
+**Outfit 2: Soft Earth-Tone Contrast**
+* **Top:** Y2K Butterfly Baby Tee
+* **Bottoms:** Wide-leg khaki trousers
+* **Accessories:** Brown leather belt
+* **Shoes:** Chunky white sneakers (or black combat boots if you want an edgy twist)
+* *Why it works:* The pink and purple tones in the butterfly print pop nicely against the neutral khaki trousers. Tucking the baby tee in with the brown leather belt pulls the look together, blending a cute Y2K top with minimal, earthy staples.
+
+  Fit card: I am still not over scoring this dreamy butterfly print Y2K baby tee on Depop for just $18. It seriously gives off the exact right amount of early 2000s mall-goth nostalgia. Can't wait to style it with some baggy denim for the ultimate off-duty look!
+
+0 model calls this session, 2 served from cache
+```
+
+The item it picked is the first search result, and the outfit text is about that same item. The last line says the answers came from cache, so I'd run it again with the cache off for a fresh one.
 
 **The three tools, tested one at a time**
 
@@ -185,24 +212,22 @@ Can't write a caption without an outfit to describe — suggest_outfit needs to 
 
 ## How I Used AI
 
-<!-- Two specific moments. What you asked, what came back, what you changed.
+1. Building run_agent. I gave Claude the branch rule and asked for the loop. It wrote the session-driven loop, a regex parser, and the early return on an empty search.
+2. Identical fit cards. I asked Claude to run create_fit_card three times, and all three captions came back identical. Claude checked config.py, saw TEMPERATURE was already 0.9, and reran with the cache off to get three different captions.
 
-     "I used Claude to help me code" is not enough.
 
-     "I gave Claude my search_listings spec. It returned None on no match
-     instead of an empty list, so I changed it" is the level we want. -->
 
 **Moment 1**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* I asked Claude to test `create_fit_card` three times on the same item and tell me if the outputs were identical.
+- *What came back:* All three captions were word-for-word the same. Claude checked `config.py` and saw `TEMPERATURE` was already 0.9, so it wasn't that. It reran the three calls with `AI201_CACHE=0` and got three different captions, which pointed at the cache returning the same answer for the same prompt.
+- *What I changed:* No code. I left the cache on while building and wrote up in the Sample Run that the cache was the cause, not the temperature. Evaluation runs turn it off.
 
 **Moment 2**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* I gave Claude my branch rule from the Tool Inventory and asked it to fill in `run_agent()`, with every tool result going into the session and read back out for the next call.
+- *What came back:* A loop that checks the session each pass to decide the next step, a regex `_parse_query` for price and size, and an early return with an error message when `search_listings` comes back empty. I ran the happy path and checked that `selected_item` was `lst_002`, the same item `suggest_outfit` wrote about. The "designer ballgown size XXS under $5" query left `fit_card` as `None` and returned a message about the price, size and keywords.
+- *What I changed:* The code worked as written, but the first README text for the branch rule didn't match it exactly, so I updated it to name `_no_results_message` and the `if not session["search_results"]` check.
 
 <!-- ═══════════════════════ UNIT 4 — THE TEST ═══════════════════════
 
