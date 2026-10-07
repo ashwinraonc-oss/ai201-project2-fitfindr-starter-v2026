@@ -41,6 +41,8 @@
 
 <!-- Three or four sentences: what a user asks for, and what they get back. -->
 
+You tell FitFindr what you're looking for, like "vintage graphic tee under $30, size M", and it searches a pile of secondhand listings for the best match. Then it suggests an outfit or two that uses the item with stuff already in your wardrobe (or just general styling ideas if you haven't added any). Last, it writes a short caption you could post about the find, with the item, price and platform in it. If nothing matches, it stops there and tells you what to change, like the price, size or keywords.
+
 
 
 ---
@@ -59,26 +61,26 @@
 
 ### `search_listings`
 
-- **What it does:** Searches the local listings data for items matching free-text keywords, optionally filtered down by size and a maximum price.
-- **Inputs:** `description` (str) — keywords describing what the user wants, e.g. `"vintage graphic tee"`. `size` (str or None) — a size to filter by, or `None` to skip size filtering (see the size-match rule below). `max_price` (float or None) — an inclusive price ceiling, or `None` to skip price filtering.
-- **Returns:** A list of listing dicts, best keyword match first, at most `config.SEARCH_RESULT_LIMIT` (10) of them. Each dict has `id`, `title`, `description`, `category`, `style_tags` (list[str]), `size`, `condition`, `price` (float), `colors` (list[str]), `brand` (str or None), `platform`.
+- **What it does:** Looks through the local listings for items that match some keywords, and can also filter by size and max price.
+- **Inputs:** `description` (str) — what the user wants, e.g. `"vintage graphic tee"`. `size` (str or None) — a size to filter on, or `None` for any size (rule below). `max_price` (float or None) — the most they'll pay, inclusive, or `None` for no limit.
+- **Returns:** A list of listing dicts, best keyword match first, capped at `config.SEARCH_RESULT_LIMIT` (10). Each dict has `id`, `title`, `description`, `category`, `style_tags` (list[str]), `size`, `condition`, `price` (float), `colors` (list[str]), `brand` (str or None), `platform`.
 - **When it has nothing:** Returns `[]` — an empty list, never `None`, never an exception.
 
-**Size-match rule** (decided now, not left to the implementation): normalize both the listing's `size` and the query's `size` by lowercasing and dropping any parenthetical note (`"XL (oversized)"` → `"xl"`). Split the normalized listing size on `"/"` into candidate tokens (`"S/M"` → `["s", "m"]`), and additionally extract the bare number from a unit-prefixed size as a second candidate (`"US 8"` → `["us 8", "8"]`, `"W30"` → `["w30", "30"]`). A match requires the normalized query to be **exactly equal** to one of those candidates — never a substring check, because `"s" in "us 9"` and `"l" in "xl"` are both true and both wrong. `"One Size"` variants only match a query that itself normalizes to some form of "one size."
+**Size-match rule:** Lowercase both sizes and drop any parenthetical (`"XL (oversized)"` → `"xl"`). Split the listing size on `"/"` so `"S/M"` gives `s` and `m`, and also pull out any number so `"US 8"` gives `us 8` and `8`, and `"W30"` gives `w30` and `30`. The query size has to exactly equal one of those. I don't use a substring check because `"s" in "us 9"` and `"l" in "xl"` are both true, and both would be wrong. "One Size" listings only match a query that also says one size.
 
 ### `suggest_outfit`
 
-- **What it does:** Given one thrifted listing and the user's wardrobe, asks the model for one or two outfit combinations that use that item.
-- **Inputs:** `new_item` (dict) — a listing dict, the item under consideration. `wardrobe` (dict) — `{"items": [...]}`; the items list may be empty.
-- **Returns:** A non-empty string with the model's outfit suggestion(s). When the wardrobe is non-empty, the string names specific wardrobe items by their `name` field rather than describing them generically.
-- **When it has nothing:** When `wardrobe["items"]` is empty, returns general styling advice for the item on its own — still a non-empty string, never `""` and never an exception.
+- **What it does:** Takes one listing and the user's wardrobe and asks the model for one or two outfits using that item.
+- **Inputs:** `new_item` (dict) — a listing dict, the item they're thinking of buying. `wardrobe` (dict) — `{"items": [...]}`; the items list may be empty.
+- **Returns:** A non-empty string with the model's outfit suggestions. If the wardrobe has items, it names them by their `name` field instead of describing them generically.
+- **When it has nothing:** If `wardrobe["items"]` is empty, it returns general styling advice for the item instead. Still a non-empty string, never `""`, never an exception.
 
 ### `create_fit_card`
 
-- **What it does:** Writes a short caption, in the voice of someone posting the find, combining the listing's details with the suggested outfit.
-- **Inputs:** `outfit` (str) — the string returned by `suggest_outfit()`. `new_item` (dict) — the listing dict for the item.
-- **Returns:** A two-to-four sentence caption string that mentions the item, its price, and its platform exactly once each.
-- **When it has nothing:** If `outfit` is empty or whitespace-only, returns the literal string `"Can't write a caption without an outfit to describe — suggest_outfit needs to run first."` rather than raising or returning `""`.
+- **What it does:** Writes a short caption like someone posting their find, using the listing details and the suggested outfit.
+- **Inputs:** `outfit` (str) — the string from `suggest_outfit()`. `new_item` (dict) — the listing dict for the item.
+- **Returns:** A caption of two to four sentences that mentions the item, price and platform once each.
+- **When it has nothing:** If `outfit` is empty or just whitespace, it returns the string `"Can't write a caption without an outfit to describe — suggest_outfit needs to run first."` instead of raising or returning `""`.
 
 ---
 
@@ -95,13 +97,13 @@
      The grader checks your code against what you claim here, so the file and
      function have to be real. -->
 
-**Branch rule:** If `search_listings` returns an empty list, put a message in `session["error"]` that names what the user could change (e.g. "No listings matched — try a higher max price or a different size"), and stop — return the session without calling `suggest_outfit` or `create_fit_card`. Otherwise, take `search_results[0]` as `selected_item` and continue on to `suggest_outfit`, then `create_fit_card`.
+**Branch rule:** If `search_listings` returns an empty list, put a message in `session["error"]` that says what the user could change (max price, size or keywords, built by `_no_results_message`) and return the session right away. `suggest_outfit` and `create_fit_card` never get called, so `session["fit_card"]` stays `None`. Otherwise take `search_results[0]` as `selected_item`, then run `suggest_outfit`, then `create_fit_card`. — `agent.py::run_agent`
 
-**Where it lives:** `agent.py::run_agent`
+**Where it lives:** `agent.py::run_agent`, in the `if not session["search_results"]:` check right after the `search_listings` call.
 
-**How the query is parsed:** Regex (`agent.py::_parse_query`). A price like `under $30` / `$30` / `under 30` becomes `max_price`; `size <token>` becomes `size`; whatever is left is the `description`. No model call.
+**How the query is parsed:** Regex, in `agent.py::_parse_query`. Something like `under $30`, `$30` or `under 30` becomes `max_price`, `size M` becomes `size`, and whatever's left is the `description`. No model call.
 
-**What moves through the session:** `parsed` → `search_results` → `selected_item` (first result) → `outfit_suggestion` → `fit_card`. Each stage reads its inputs back out of the session; `error` is set (and the loop returns) if the search is empty.
+**What moves through the session:** `parsed` → `search_results` → `selected_item` (first result) → `outfit_suggestion` → `fit_card`. Each step reads its inputs back out of the session instead of taking them from the last call. If the search comes back empty, `error` gets set and the loop returns.
 
 ---
 
@@ -125,7 +127,7 @@ $ python -c "from tools import search_listings; print(search_listings('graphic t
 [{'id': 'lst_002', 'title': 'Y2K Baby Tee — Butterfly Print', ...}, {'id': 'lst_006', 'title': 'Graphic Tee — 2003 Tour Bootleg Style', ...}, {'id': 'lst_017', 'title': 'Mesh Long-Sleeve Top — Black', ...}, {'id': 'lst_033', 'title': 'Vintage Band Tee — Faded Grey', ...}, {'id': 'lst_011', 'title': 'Low-Rise Cargo Pants — Khaki', ...}, {'id': 'lst_015', 'title': 'Vintage Graphic Hoodie — Faded Black', ...}]
 ```
 
-6 results, all under $30, highest keyword-overlap score first. `lst_011` (cargo pants) is the weakest match — it only shares the token "tee" with the query, from "...layering with a long tee" in its description — which is the plain-keyword-overlap limitation criterion 1 in `criteria.md` names.
+6 results, all under $30. The cargo pants (`lst_011`) are the weakest match, since they only share the word "tee" with my query, from "layering with a long tee" in the description. That's the keyword-overlap problem I mention in criterion 1.
 
 ```
 $ python -c "from tools import suggest_outfit; from utils.data_loader import get_example_wardrobe, load_listings; print(suggest_outfit(load_listings()[0], get_example_wardrobe()))"
@@ -147,13 +149,13 @@ Outfit 2: Vintage Grunge Edge
 - Accessories: Brown leather belt
 ```
 
-Also tested with `get_empty_wardrobe()` in place of `get_example_wardrobe()` to hit the empty-case branch:
+Same command with `get_empty_wardrobe()` to hit the empty case:
 
 ```
 Pair these vintage Levi's 501s with a tucked-in graphic tee and a leather jacket for an effortless, classic streetwear look. Alternatively, dress them up with an oversized button-down shirt and loafers or retro sneakers to balance the relaxed medium-wash denim.
 ```
 
-Non-empty general advice, no wardrobe pieces named — no crash, no empty string.
+It gives general advice and doesn't name any wardrobe pieces. No crash and no empty string.
 
 ```
 $ python -c "from tools import create_fit_card; from utils.data_loader import load_listings; print(create_fit_card('jeans and white sneakers', load_listings()[0]))"
@@ -161,7 +163,7 @@ $ python -c "from tools import create_fit_card; from utils.data_loader import lo
 Still screaming that I actually scored these vintage Levi's 501 jeans on Depop for only $38.00! The medium wash has that perfectly broken-in, 90s indie sleaze fade that you just can't fake. Throwing them on with some fresh white sneakers and calling it my entire personality for the foreseeable future.
 ```
 
-Ran it three times on the same item to check for the identical-output trap the brief warns about. With the cache left on (the default), runs 2 and 3 came back **word-for-word identical** to run 1 — expected, since `TEMPERATURE` is 0.9 (not the other suspect) and an identical prompt reused the cached answer. Calling `generate.clear_cache()` between each of the three calls instead gave three genuinely different captions, each still naming the item, `$38.00`, and Depop exactly once:
+I ran it three times on the same item to check for identical outputs. With the cache on (the default), runs 2 and 3 came back word-for-word identical to run 1. `TEMPERATURE` is already 0.9, so it was the cache returning the same answer for the same prompt. With the cache cleared between calls I got three different captions, and each one still has the item, `$38.00` and Depop once:
 
 ```
 Still screaming that I actually scored these vintage Levi's 501 jeans on Depop for only $38.00! The wash is that *exact* lazy-Sunday-morning blue that literally goes with everything. Honestly can't wait to throw them on with my beat-up white sneakers for the ultimate effortless 90s off-duty look.
@@ -171,7 +173,7 @@ Still not over scoring these vintage Levi's 501 jeans for just $38 on Depop! The
 Found the holy grail of denim today on depop and my life is officially complete. These vintage Levi's 501 jeans in the absolute dreamiest medium wash were only $38.00, which feels like an absolute steal. I'm already planning to live in them with my go-to white sneakers all through autumn.
 ```
 
-Also tested the empty-outfit guard:
+And the empty-outfit guard:
 
 ```
 $ python -c "from tools import create_fit_card; from utils.data_loader import load_listings; print(create_fit_card('   ', load_listings()[0]))"
