@@ -214,6 +214,9 @@ Can't write a caption without an outfit to describe — suggest_outfit needs to 
 
 1. Building run_agent. I gave Claude the branch rule and asked for the loop. It wrote the session-driven loop, a regex parser, and the early return on an empty search.
 2. Identical fit cards. I asked Claude to run create_fit_card three times, and all three captions came back identical. Claude checked config.py, saw TEMPERATURE was already 0.9, and reran with the cache off to get three different captions.
+3. The MCP move. I asked Claude to move search_listings onto MCP and point the agent at it. It wrote the tool's description and typed inputs straight from the Tool Inventory, checked the registration with mcp_client.py before touching agent.py at all, then swapped the direct call for the MCP one.
+4. The model-unavailable failure didn't actually fail safely. I asked Claude to trigger all three failure modes on purpose, including a broken API key. It found that a bad key crashed the whole process (exit code 1) instead of returning a usable session — app.py's catch-all kept it from printing a raw traceback, but the program still died. Claude added a try/except around the two model-calling steps in run_agent.
+5. Criterion 1's "before" test wasn't testing what it claimed to. While scoring the Run Log, Claude pointed out that criterion 1's scenario sent the identical query five times, so it never exercised the phrasing-miss risk its own "why this target" argument in criteria.md was about, despite scoring 5/5. I had it extend run_eval.py so a scenario can cycle through five different phrasings instead, and used that as this unit's one improvement.
 
 
 
@@ -228,6 +231,18 @@ Can't write a caption without an outfit to describe — suggest_outfit needs to 
 - *What I asked for:* I gave Claude my branch rule from the Tool Inventory and asked it to fill in `run_agent()`, with every tool result going into the session and read back out for the next call.
 - *What came back:* A loop that checks the session each pass to decide the next step, a regex `_parse_query` for price and size, and an early return with an error message when `search_listings` comes back empty. I ran the happy path and checked that `selected_item` was `lst_002`, the same item `suggest_outfit` wrote about. The "designer ballgown size XXS under $5" query left `fit_card` as `None` and returned a message about the price, size and keywords.
 - *What I changed:* The code worked as written, but the first README text for the branch rule didn't match it exactly, so I updated it to name `_no_results_message` and the `if not session["search_results"]` check.
+
+**Moment 3 (unit 4)**
+
+- *What I asked for:* I asked Claude to trigger each of the three failure modes on purpose — empty search, empty wardrobe, and a broken API key — and write down what the agent actually said each time.
+- *What came back:* The first two were already handled correctly. The third wasn't: breaking one character of `GEMINI_API_KEY` and running a query made the whole process exit with code 1. `app.py`'s top-level catch kept it from printing a raw Python traceback, but the run still died instead of producing a usable session.
+- *What I changed:* Claude added a `try/except ModelUnavailable` around the `suggest_outfit` and `create_fit_card` calls in `run_agent`, writing a readable message into `session["error"]` and returning the session normally instead of letting the exception kill the process. Retested with the same broken key — clean exit, then restored the real key.
+
+**Moment 4 (unit 4)**
+
+- *What I asked for:* I asked Claude to score my five criteria against the Run Log output and fill in Verdicts and Diagnoses.
+- *What came back:* Everything scored MET, but Claude flagged two things I hadn't caught myself. First, criterion 3's claim that it's "checked from the trace" doesn't actually hold — `trace.py`'s summary collapses a tool's inputs down to `"dict with keys: new_item, wardrobe_items"`, never showing the `id`, so it verified that criterion with a separate instrumented run instead of citing the trace as proof. Second, criterion 1's scenario repeated the exact same query five times, so despite scoring 5/5 it never actually tested the phrasing-miss risk criterion 1's own justification is about.
+- *What I changed:* I had Claude fix the second issue as this unit's one allowed improvement: it added list-of-queries support to `run_eval.py`/`scenarios.py` and rewrote criterion 1's scenario to use five different, pre-verified phrasings, then reran the eval. The verdict didn't change (still 5/5), but the evidence behind it is now real.
 
 <!-- ═══════════════════════ UNIT 4 — THE TEST ═══════════════════════
 
@@ -249,17 +264,86 @@ Can't write a caption without an outfit to describe — suggest_outfit needs to 
 
 | Criterion | Target | Try 1 | Try 2 | Try 3 | Try 4 | Try 5 | Verdict |
 |---|---|---|---|---|---|---|---|
-| 1.  |  |  |  |  |  |  |  |
-| 2.  |  |  |  |  |  |  |  |
-| 3.  |  |  |  |  |  |  |  |
-| 4.  |  |  |  |  |  |  |  |
-| 5.  |  |  |  |  |  |  |  |
+| 1. Matching query completes all three tools, returns a fit card | 4 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 2. Impossible query stops before `suggest_outfit` | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 3. `selected_item`'s id matches the id every later tool actually received | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 4. 5 fit cards on the same item differ from each other, every one keeps the price and platform | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 5. A broken API key returns a readable `session["error"]` instead of crashing | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+
+Scenarios for 1, 2, 3, and 4 are defined in `scenarios.py` and run by
+`run_eval.py::main` → `agent.py::run_agent`, five tries each, caching off.
+Criterion 5 can't go through that same harness: `generate.py` caches its
+model client in a module-level global after the first successful call, so
+breaking `GEMINI_API_KEY` partway through the same process would either leak
+into whichever scenario ran next, or get silently ignored if a working
+client was already cached. It's measured on its own by
+`scripts/criterion5_model_unavailable.py`, which runs each of its five tries
+in a fresh subprocess with the key overridden only in that subprocess's
+environment — the real key in `.env` is never read or touched.
 
 **Real output from one try**, pasted as text, naming the file and function
 that produced it:
 
+Criterion 1, try 1 — produced by `agent.py::run_agent`, logged by
+`run_eval.py::run_once` into `results/run_2026-10-13_1518_before.md`:
+
+```
+selected_item: Y2K Baby Tee — Butterfly Print ($18.0, depop)
+
+Fit card:
+Still not over finding this butterfly print Y2K baby tee on Depop for just $18! It's giving major early-2000s mall rat energy, and I am so ready to live out my ultimate Y2K pop star fantasy.
 ```
 
+Criterion 2, try 1 — produced by `agent.py::run_agent`'s branch (the `if not
+session["search_results"]` check), same file:
+
+```
+[2] search_listings (via MCP)
+      in:  dict with keys: description, size, max_price
+      out: [] (empty)
+      →    branch: empty, stopping before suggest_outfit
+
+stopped early: yes — No listings matched your search. You could raise your max price above $5, try a different size than XXS or drop the size, or use broader or different keywords than "designer ballgown".
+```
+
+Criterion 3 — the trace's own `_short()` summary collapses a tool's `inputs`
+dict down to `"dict with keys: new_item, wardrobe_items"`, which doesn't
+actually show the id, so I checked it directly instead of trusting the
+trace text. This is real output from a one-off instrumented run (not saved
+under `results/`, since `run_eval.py` doesn't capture it this way) that
+monkeypatches `tools.suggest_outfit` and `tools.create_fit_card` to record
+the `id` of the `new_item` they're actually called with, run through
+`agent.py::run_agent` five times on the "90s track jacket" scenario:
+
+```
+try 1: selected_item.id='lst_004'  suggest_outfit got='lst_004'  create_fit_card got='lst_004'  -> PASS
+try 2: selected_item.id='lst_004'  suggest_outfit got='lst_004'  create_fit_card got='lst_004'  -> PASS
+try 3: selected_item.id='lst_004'  suggest_outfit got='lst_004'  create_fit_card got='lst_004'  -> PASS
+try 4: selected_item.id='lst_004'  suggest_outfit got='lst_004'  create_fit_card got='lst_004'  -> PASS
+try 5: selected_item.id='lst_004'  suggest_outfit got='lst_004'  create_fit_card got='lst_004'  -> PASS
+```
+
+Criterion 4, try 1 and try 5 — produced by `tools.py::create_fit_card`, same
+item (`lst_002`, $18.0, depop) both times, logged in
+`results/run_2026-10-13_1518_before.md`:
+
+```
+Try 1: Still screaming about finding this Y2K Baby Tee — Butterfly Print on depop for only $18.00! It's giving major model-off-duty energy, and I am so ready to style it with baggy denim and combat boots. My inner 2000s pop star could never.
+
+Try 5: Found the holy grail on Depop today—this Y2K butterfly baby tee for only $18! I'm so obsessed with the cute little graphic and already planning a million baggy denim fits around it. Truly living out my early 2000s pop star dreams. 🦋✨
+```
+
+Different wording both times, and both name the price (`$18.00` / `$18`)
+and the platform (`depop` / `Depop`).
+
+Criterion 5, try 1 — produced by `scripts/criterion5_model_unavailable.py`,
+calling `agent.py::run_agent` with `GEMINI_API_KEY` overridden to a broken
+value in the subprocess environment only:
+
+```
+session['error']:            "Couldn't reach the model to suggest an outfit: The model rejected your API key. Check GEMINI_API_KEY in your .env file, or create a fresh key at aistudio.google.com."
+session['outfit_suggestion']: None
+session['fit_card']:          None
 ```
 
 ---
@@ -284,13 +368,19 @@ that produced it:
 
 | # | Criterion | Target | Verdict | How I decided |
 |---|---|---|---|---|
-| 1 |  |  |  |  |
-| 2 |  |  |  |  |
-| 3 |  |  |  |  |
-| 4 |  |  |  |  |
-| 5 |  |  |  |  |
+| 1 | Matching query completes all three tools, returns a fit card | 4 of 5 | MET | 5 of 5 tries completed — `stopped early: no` on every try, a fit card present every time. 5 clears the 4-of-5 target with room, so it holds. |
+| 2 | Impossible query stops before `suggest_outfit` | 5 of 5 | MET | 5 of 5 tries stopped early with the "no listings matched" message, 0 model calls each time (confirmed by the trace being 2 steps long, not 5). The target is 5 of 5 exactly, and 5 is what I got. |
+| 3 | `selected_item`'s id matches the id every later tool actually received | 5 of 5 | MET | 5 of 5 — checked by instrumenting `tools.suggest_outfit` and `tools.create_fit_card` directly rather than trusting the trace's shortened summary (see Run Log above), since the trace alone doesn't show the id. All three ids agreed on every try. |
+| 4 | 5 fit cards on the same item differ from each other, every one keeps the price and platform | 5 of 5 | MET | Read all 5 captions by eye: no two are word-for-word identical, and every one names `$18` or `$18.00` and `depop`/`Depop`. 5 of 5 against a 5-of-5 target. |
+| 5 | A broken API key returns a readable `session["error"]` instead of crashing | 5 of 5 | MET | 5 of 5 from `scripts/criterion5_model_unavailable.py` — every try returned a non-empty `session["error"]` naming what broke, with `outfit_suggestion` and `fit_card` both still `None`, no crash. |
 
 **Diagnoses**
+
+I missed nothing — all five criteria held at their target, with four of the five landing at a clean 5/5. There's nothing to diagnose by tool, branch, session, or model output, because nothing failed.
+
+That's not the same as every target being well-set, though. Four of the five I'd defend as genuinely tested: criteria 2, 3, and 5 each check a plain code path (a branch, a variable assignment, an exception handler) that has no real reason to vary try to try, so 5/5 there is the right bar and meeting it is real evidence. Criterion 4 forces five actual, independent model calls on temperature 0.9 — a real chance to fail each time — and it held.
+
+**Criterion 1 is the one I'd tighten, and the test is weaker than the number suggests.** The "why this target" I wrote in `criteria.md` was: *"my search is a plain keyword-overlap scorer, and a real phrasing can describe a listing that exists without sharing enough literal words with it — one miss in five realistic phrasings is a limitation of keyword matching, not a loop bug."* That's an argument about phrasing variance. But the scenario I actually wrote for it in `scenarios.py` sends the exact same query string, `"vintage graphic tee under $30"`, all five times. `search_listings` is deterministic — same query in, same ranked list out — so all five tries necessarily take the identical path through the branch; the only thing that could have varied between tries at all was `suggest_outfit` and `create_fit_card`'s wording, not whether search found anything. 5/5 here is real evidence that the model calls complete reliably, but it is **not** evidence for the thing the target's own justification is about — whether different realistic phrasings of the same request still find the item. I'd tighten this by replacing the single repeated query with five different phrasings of a request the data can satisfy (e.g. "band tee under $30", "graphic shirt, vintage, under $30", "cheap vintage graphic tee") and re-measure against those, which is the test the 4-of-5 target was actually written to describe.
 
 
 
@@ -311,19 +401,54 @@ that produced it:
 **Happy path**
 
 ```
+$ python app.py ask 'vintage graphic tee under $30' --trace
 
+[1] parse_query
+      in:  vintage graphic tee under $30
+      out: dict with keys: description, size, max_price
+[2] search_listings (via MCP)
+      in:  dict with keys: description, size, max_price
+      out: 10 items: Y2K Baby Tee — Butterfly Print, Graphic Tee — 2003 Tour Bootleg Style, Vintage Band Tee — Faded Grey … +7 more
+      →    branch: results found, continuing
+[3] select_item
+      in:  dict with keys: candidates
+      out: Y2K Baby Tee — Butterfly Print ($18.0, depop)
+      →    took the first result
+[4] suggest_outfit
+      in:  dict with keys: new_item, wardrobe_items
+      out: Here are two outfit ideas that pair the new Y2K Butterfly Baby Tee with pieces from your existing wardrobe: …
+[5] create_fit_card
+      in:  dict with keys: outfit, new_item
+      out: Obsessed with this Y2K butterfly baby tee I just scored on depop for only $18! The pastel pink and purple prin…
+
+  Found:    Y2K Baby Tee — Butterfly Print — $18.0 on depop
+  Outfit:   (two full outfit suggestions, pairing the tee with wardrobe pieces)
+  Fit card: Obsessed with this Y2K butterfly baby tee I just scored on depop for only $18! ...
+
+2 model calls this session, 750 prompt + 389 output tokens
 ```
 
 **Empty search**
 
 ```
+$ python app.py ask 'nonexistent designer ski suit size XXXL under $2' --trace
 
+[1] parse_query
+      in:  nonexistent designer ski suit size XXXL under $2
+      out: dict with keys: description, size, max_price
+[2] search_listings (via MCP)
+      in:  dict with keys: description, size, max_price
+      out: [] (empty)
+      →    branch: empty, stopping before suggest_outfit
+
+  No listings matched your search. You could raise your max price above $2, try a different size than XXXL or drop the size, or use broader or different keywords than "nonexistent designer ski suit".
+
+0 model calls this session
 ```
 
-**On the MCP move:** <!-- what changed in your code, and whether anything
-behaved differently afterwards. If the rewire didn't work, say exactly where it
-broke — the error text and the last thing that worked. That earns the point in
-full. -->
+Two steps instead of five, and it stops before `suggest_outfit` ever runs — 0 model calls confirms the branch actually short-circuits rather than just printing a different message at the end.
+
+**On the MCP move:** `agent.py::run_agent` now calls `mcp_client.call_tool("search_listings", {...})` instead of importing and calling `tools.search_listings` directly (the direct import was removed from `agent.py`'s imports). The trace step is labeled `search_listings (via MCP)` so the MCP call is visible in the trace itself, not just inferred. Nothing behaved differently after the rewire: the same query returns the same item, same outfit, same fit card as the direct call did in unit 3 — confirmed by diffing the two runs' output before and after the swap.
 
 
 
@@ -338,22 +463,41 @@ full. -->
 
 **What I changed:**
 
+Not the agent — the *test* for criterion 1. `scenarios.py`'s "matching query completes" scenario sent the identical string, `"vintage graphic tee under $30"`, all five tries. `search_listings` is deterministic, so all five tries necessarily took the same path through the branch; nothing about whether different phrasings of the same request still find the item was ever actually exercised. I added support in `run_eval.py::run_once` / `_query_for_try` for a scenario's `"query"` to be a list of five strings instead of one repeated string — each try now gets a different one, cycling through the list — and changed criterion 1's scenario to five different real phrasings of the same findable item (`"band tee under $30"`, `"retro graphic shirt under $30"`, etc.), each checked against `search_listings` directly beforehand so a FAIL would mean the phrasing genuinely didn't score, not that nothing in the data could have matched it. `agent.py` and `tools.py` are untouched.
+
 **Which failure it was meant to fix:**
+
+Not a failure in the agent — nothing in the "before" run missed. It fixes a failure in the *measurement*: criterion 1's own "why this target" argument (in `criteria.md`) is specifically about keyword-overlap search missing on phrasing, and the "before" scenario didn't test that claim at all. This follows directly from the Diagnoses section above, where I named this as the one criterion I'd tighten.
 
 ### Run Log — After
 
 | Criterion | Target | Try 1 | Try 2 | Try 3 | Try 4 | Try 5 | Verdict |
 |---|---|---|---|---|---|---|---|
-| 1.  |  |  |  |  |  |  |  |
-| 2.  |  |  |  |  |  |  |  |
-| 3.  |  |  |  |  |  |  |  |
-| 4.  |  |  |  |  |  |  |  |
-| 5.  |  |  |  |  |  |  |  |
+| 1. Matching query completes, 5 *different* phrasings | 4 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 2. Impossible query stops before `suggest_outfit` | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) — unchanged |
+| 3. `selected_item`'s id matches every tool it reaches | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) — unchanged |
+| 4. 5 fit cards on the same item differ, keep price/platform | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) — unchanged |
+| 5. Broken key returns readable `session["error"]` | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) — unchanged, not rerun |
+
+Full log: `results/run_2026-10-13_1528_after.md`, produced by `run_eval.py::main`. Criteria 2–4 used the same scenarios as "before" and came out identical, as expected — nothing about them changed. Criterion 5 isn't part of this harness (see the note under Run Log — Before) and nothing about it changed either, so I didn't re-run `scripts/criterion5_model_unavailable.py` — there was no new input to feed it.
+
+Criterion 1, the actual new data — five different queries, five different results:
+
+```
+Try 1 — query: vintage graphic tee under $30             -> Y2K Baby Tee — Butterfly Print ($18.0, depop)
+Try 2 — query: band tee under $30                        -> Graphic Tee — 2003 Tour Bootleg Style ($24.0, depop)
+Try 3 — query: retro graphic shirt under $30             -> Y2K Baby Tee — Butterfly Print ($18.0, depop)
+Try 4 — query: 80s or 90s style graphic t-shirt under $30 -> Graphic Tee — 2003 Tour Bootleg Style ($24.0, depop)
+Try 5 — query: faded vintage band t-shirt under $30      -> Graphic Tee — 2003 Tour Bootleg Style ($24.0, depop)
+```
+
+All five completed (`stopped early: no` on every try), picking two different real items depending on phrasing rather than the same one five times.
 
 **Did it help, and how do I know:**
 
-<!-- If it made things worse, say that. Honestly reported, that earns full
-     credit and is more interesting than one that worked. -->
+It didn't change the verdict — criterion 1 was MET before (5/5 on the weak test) and is still MET after (5/5 on the stronger one). If I only looked at the Verdict column, I'd say nothing happened.
+
+But that's not really true, and the difference is visible in the row above it: before, the "5/5" was five identical runs of one query that could only have failed by chance (an API hiccup), because `search_listings` always returns the same ranked list for the same input. After, it's five runs of five different real phrasings, landing on two different items depending on which words were used — meaning the keyword-overlap scorer really was being tested against the thing criterion 1's own justification worried about, and it happened to clear all five anyway. So the improvement didn't fix a broken result; it replaced a number I couldn't actually trust with one I can. That's worth reporting plainly rather than as a bigger win than it was: the system's behavior didn't change at all, only my evidence for it did.
 
 
 
@@ -361,9 +505,13 @@ full. -->
 
 ## What's Still Broken
 
-<!-- For each criterion still missed: what you'd do, and why you stopped where
-     you did. "I ran out of time" is fine if it's true. Pretending nothing is
-     left is not. -->
+No criterion is MISSED, before or after, so there's no per-criterion fix list to write here. That's not the same as nothing being left — these are the real gaps I know about that none of the five criteria happen to name:
+
+- **The keyword-overlap scorer still surfaces weak matches, not just the right one.** Scoring against title + description + style_tags + brand + category equally means a single incidental word shared with an unrelated field counts the same as a real match — e.g. a cargo-pants listing scored against "graphic tee" purely because its description mentions "...layering with a long tee" once, in a sentence about something else entirely. The right item still ranks above it every time I've checked, so no criterion has caught this, but it's a precision gap, not a correctness one. I'd fix it by weighting matches in `title`/`style_tags` higher than matches in free-text `description`, or requiring at least one match outside `description` alone. I stopped at noticing it rather than fixing it because none of my five criteria name it, and this unit's rule is to follow a diagnosis, not chase every imperfection I happen to notice while reading output.
+
+- **Criterion 5 lives outside `run_eval.py` entirely**, in `scripts/criterion5_model_unavailable.py`'s own subprocess harness. It works and I trust its output, but there's no single command that reproduces all five criteria in one run — someone checking my work has to run two different scripts. The real fix is giving `run_eval.py`'s scenarios an optional per-scenario environment override, so a "broken key" scenario could fold into the normal flow. I stopped short of building that because it's a harness change at least as large as this unit's one allowed improvement, and I'd already spent that on criterion 1's test.
+
+- **Only `search_listings` is on MCP**, as the brief asked for — `suggest_outfit` and `create_fit_card` are still direct calls into `tools.py`. Not broken, and not a stretch feature I claimed, but it's the obvious next seam if this agent kept growing: right now a second agent could reach the catalog through MCP but still couldn't ask this one for outfit advice or a caption.
 
 
 

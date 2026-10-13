@@ -37,7 +37,23 @@ import config
 import scenarios as scenario_module
 
 
-def run_once(scenario, use_trace=True):
+def _query_for_try(scenario, attempt: int) -> str:
+    """
+    The query to use for this one try.
+
+    scenario["query"] is usually a single string, repeated every try — right
+    for a branch or state check, which has no reason to vary input to input.
+    It can also be a LIST of strings, one per try: cycling through them
+    (rather than repeating the same one) is what a criterion about *phrasing*
+    actually needs to test — see criterion 1 in scenarios.py for why.
+    """
+    query = scenario["query"]
+    if isinstance(query, list):
+        return query[(attempt - 1) % len(query)]
+    return query
+
+
+def run_once(scenario, attempt=1, use_trace=True):
     """One scenario, one try. Returns everything worth recording."""
     from agent import run_agent
     from utils.data_loader import get_example_wardrobe, get_empty_wardrobe
@@ -46,13 +62,14 @@ def run_once(scenario, use_trace=True):
     wardrobe = (
         get_empty_wardrobe() if scenario["wardrobe"] == "empty" else get_example_wardrobe()
     )
+    query = _query_for_try(scenario, attempt)
 
     if use_trace:
         trace_module.start_trace()
 
-    record = {"error": None, "session": None, "trace": "", "crashed": None}
+    record = {"error": None, "session": None, "trace": "", "crashed": None, "query": query}
     try:
-        record["session"] = run_agent(scenario["query"], wardrobe)
+        record["session"] = run_agent(query, wardrobe)
     except Exception as exc:  # noqa: BLE001 — a crash is a result worth logging
         record["crashed"] = f"{type(exc).__name__}: {exc}"
         record["traceback"] = traceback.format_exc()
@@ -91,11 +108,14 @@ def main():
     rows = []
     for scenario in scenario_module.SCENARIOS:
         print(f"{scenario['name']}  ({scenario['wardrobe']} wardrobe)")
-        print(f"  query: {scenario['query']}")
+        if isinstance(scenario["query"], list):
+            print(f"  query: cycling through {len(scenario['query'])} phrasings, one per try")
+        else:
+            print(f"  query: {scenario['query']}")
 
         tries = []
         for attempt in range(1, args.tries + 1):
-            record = run_once(scenario)
+            record = run_once(scenario, attempt)
             tries.append(record)
 
             if record["crashed"]:
@@ -172,12 +192,17 @@ def write_report(rows, args):
 
     for row in rows:
         scenario = row["scenario"]
+        query_line = (
+            f"cycling through {len(scenario['query'])} phrasings, one per try (see each Try below)"
+            if isinstance(scenario["query"], list)
+            else f"`{scenario['query']}`"
+        )
         lines += [f"### {scenario['name']}", "",
-                  f"- Query: `{scenario['query']}`",
+                  f"- Query: {query_line}",
                   f"- Wardrobe: {scenario['wardrobe']}", ""]
 
         for i, record in enumerate(row["tries"], 1):
-            lines.append(f"**Try {i}**")
+            lines.append(f"**Try {i}** — query: `{record.get('query', scenario['query'])}`")
             lines.append("")
 
             if record["crashed"]:

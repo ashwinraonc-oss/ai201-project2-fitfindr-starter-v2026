@@ -17,7 +17,8 @@ import re
 
 import config
 import trace
-from tools import search_listings, suggest_outfit, create_fit_card
+from mcp_client import call_tool
+from tools import suggest_outfit, create_fit_card
 from generate import ModelUnavailable
 
 
@@ -119,28 +120,83 @@ def run_agent(query: str, wardrobe: dict) -> dict:
 
         if not session["parsed"]:
             session["parsed"] = _parse_query(session["query"])
+            trace.step("parse_query", inputs=session["query"], returned=session["parsed"])
 
         elif not session["search_results"]:
             parsed = session["parsed"]
-            session["search_results"] = search_listings(
-                parsed["description"], parsed["size"], parsed["max_price"]
-            )
+            session["search_results"] = call_tool("search_listings", {
+                "description": parsed["description"],
+                "size": parsed["size"],
+                "max_price": parsed["max_price"],
+            })
             # THE BRANCH: nothing found -> say what to change, and stop.
             if not session["search_results"]:
                 session["error"] = _no_results_message(parsed)
+                trace.step(
+                    "search_listings (via MCP)", inputs=parsed,
+                    returned=session["search_results"],
+                    note="branch: empty, stopping before suggest_outfit",
+                )
                 return session
+            trace.step(
+                "search_listings (via MCP)", inputs=parsed,
+                returned=session["search_results"],
+                note="branch: results found, continuing",
+            )
 
         elif session["selected_item"] is None:
             session["selected_item"] = session["search_results"][0]
+            trace.step(
+                "select_item",
+                inputs={"candidates": len(session["search_results"])},
+                returned=session["selected_item"],
+                note="took the first result",
+            )
 
         elif session["outfit_suggestion"] is None:
-            session["outfit_suggestion"] = suggest_outfit(
-                session["selected_item"], session["wardrobe"]
+            try:
+                session["outfit_suggestion"] = suggest_outfit(
+                    session["selected_item"], session["wardrobe"]
+                )
+            except ModelUnavailable as exc:
+                session["error"] = (
+                    f"Couldn't reach the model to suggest an outfit: {exc}"
+                )
+                trace.step(
+                    "suggest_outfit", inputs=session["selected_item"],
+                    note=f"ModelUnavailable, stopping: {exc}",
+                )
+                return session
+            trace.step(
+                "suggest_outfit",
+                inputs={
+                    "new_item": session["selected_item"],
+                    "wardrobe_items": len(session["wardrobe"].get("items") or []),
+                },
+                returned=session["outfit_suggestion"],
             )
 
         elif session["fit_card"] is None:
-            session["fit_card"] = create_fit_card(
-                session["outfit_suggestion"], session["selected_item"]
+            try:
+                session["fit_card"] = create_fit_card(
+                    session["outfit_suggestion"], session["selected_item"]
+                )
+            except ModelUnavailable as exc:
+                session["error"] = (
+                    f"Couldn't reach the model to write a fit card: {exc}"
+                )
+                trace.step(
+                    "create_fit_card", inputs=session["outfit_suggestion"],
+                    note=f"ModelUnavailable, stopping: {exc}",
+                )
+                return session
+            trace.step(
+                "create_fit_card",
+                inputs={
+                    "outfit": session["outfit_suggestion"],
+                    "new_item": session["selected_item"],
+                },
+                returned=session["fit_card"],
             )
 
         else:
